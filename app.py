@@ -4,6 +4,7 @@ import numpy as np
 import json
 import os
 import pandas as pd
+from io import BytesIO
 
 DB_FILE = "subjects.json"
 RESULT_FILE = "exam_results.xlsx"
@@ -78,9 +79,9 @@ st.set_page_config(page_title="ระบบตรวจข้อสอบ OMR", 
 st.title("🎯 ระบบตรวจข้อสอบอัจฉริยะ (ฝน / กากบาท)")
 
 db = load_db()
-tab1, tab2 = st.tabs(["📷 ตรวจกระดาษคำตอบ", "⚙️ เพิ่ม/จัดการวิชาและเฉลย"])
+tab1, tab2, tab3 = st.tabs(["📷 ตรวจกระดาษคำตอบ", "📊 ดูผลคะแนน / ดาวน์โหลด Excel", "⚙️ เพิ่ม/จัดการวิชาและเฉลย"])
 
-with tab2:
+with tab3:
     st.subheader("เพิ่มรายวิชาและชุดเฉลย")
     with st.form("add_form"):
         code = st.text_input("รหัสวิชา (เช่น SOC101)")
@@ -136,4 +137,24 @@ with tab1:
             else:
                 df_all = pd.DataFrame([new_row])
             df_all.to_excel(RESULT_FILE, index=False)
-            st.success(f"บันทึกคะแนนของเลขที่ {student_id} ลงไฟล์ Excel ({RESULT_FILE}) เรียบร้อยแล้ว!")
+            st.success(f"บันทึกคะแนนของเลขที่ {student_id} เรียบร้อยแล้ว!")
+
+with tab2:
+    st.subheader("ตารางคะแนนรวมทั้งหมด")
+    if os.path.exists(RESULT_FILE):
+        df_display = pd.read_excel(RESULT_FILE)
+        st.dataframe(df_display, use_container_width=True)
+        
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_display.to_excel(writer, index=False)
+        excel_data = output.getvalue()
+        
+        st.download_button(
+            label="📥 ดาวน์โหลดไฟล์ Excel (exam_results.xlsx)",
+            data=excel_data,
+            file_name="exam_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.write("ยังไม่มีข้อมูลคะแนนที่ตรวจ")
