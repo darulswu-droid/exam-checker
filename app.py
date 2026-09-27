@@ -19,6 +19,8 @@ def save_db(data):
 def align_and_grade_40(image_bytes, total_q=40, num_choices=4):
     file_bytes = np.asarray(bytearray(image_bytes), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if image is None:
+        return None, "ไม่สามารถอ่านไฟล์รูปภาพได้ กรุณาลองถ่ายใหม่อีกครั้ง"
     
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -37,7 +39,6 @@ def align_and_grade_40(image_bytes, total_q=40, num_choices=4):
             if 0.7 <= aspect_ratio <= 1.3 and cv2.contourArea(c) > 60:
                 marker_boxes.append((x + w/2, y + h/2))
 
-    # ดึงระนาบภาพให้ตรงตามมาร์กเกอร์
     w_box, h_box = 800, 1100
     if len(marker_boxes) >= 4:
         marker_boxes = sorted(marker_boxes, key=lambda p: p[1])
@@ -48,12 +49,12 @@ def align_and_grade_40(image_bytes, total_q=40, num_choices=4):
         matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(thresh, matrix, (w_box, h_box))
     else:
+        # กรณีหามาร์กเกอร์ไม่ครบทั้ง 4 มุม
         warped = cv2.resize(thresh, (w_box, h_box))
 
     choice_map = {0: "ก", 1: "ข", 2: "ค", 3: "ง"}
     detected = []
 
-    # กำหนดพิกัดกรอบตาราง 2 คอลัมน์ (ซ้าย: ข้อ 1-20, ขวา: ข้อ 21-40)
     cols_area = [
         {"x_start": int(w_box * 0.08), "x_end": int(w_box * 0.48), "q_range": (0, min(20, total_q))},
         {"x_start": int(w_box * 0.52), "x_end": int(w_box * 0.92), "q_range": (20, min(40, total_q))}
@@ -68,7 +69,7 @@ def align_and_grade_40(image_bytes, total_q=40, num_choices=4):
 
     for area in cols_area:
         start_idx, end_idx = area["q_range"]
-        col_w = (area["x_end"] - area["x_start"]) // (num_choices + 1) # เผื่อช่องเลขข้อ
+        col_w = (area["x_end"] - area["x_start"]) // (num_choices + 1)
         choices_start_x = area["x_start"] + col_w
 
         for i in range(start_idx, end_idx):
@@ -94,10 +95,10 @@ def align_and_grade_40(image_bytes, total_q=40, num_choices=4):
     for q in range(1, total_q + 1):
         detected.append(answers_dict.get(q, "ไม่ตอบ"))
 
-    return detected
+    return detected, None
 
-st.set_page_config(page_title="ระบบตรวจข้อสอบ OMR 40 ข้อ", layout="wide")
-st.title("🎯 ระบบตรวจข้อสอบอัจฉริยะ (ฝน / กากบาท - 40 ข้อ)")
+st.set_page_config(page_title="ระบบตรวจข้อสอบ OMR", layout="wide")
+st.title("🎯 ระบบตรวจข้อสอบอัจฉริยะ (ฝน / กากบาท)")
 
 db = load_db()
 tab1, tab2, tab3 = st.tabs(["📷 ตรวจกระดาษคำตอบ", "📊 ดูผลคะแนน / ดาวน์โหลด Excel", "⚙️ เพิ่ม/จัดการวิชาและเฉลย"])
@@ -133,39 +134,49 @@ with tab1:
         sub_info = db[subject_list[selected]]
         
         student_id = st.text_input("เลขที่ / รหัสนักเรียน", value="1")
-        uploaded_file = st.file_uploader("อัปโหลดหรือถ่ายภาพกระดาษคำตอบ", type=["jpg", "png", "jpeg"])
+        
+        mode = st.radio("เลือกวิธีส่งภาพกระดาษคำตอบ:", ["📸 ถ่ายภาพสดด้วยกล้อง", "📁 อัปโหลดไฟล์ภาพ"], horizontal=True)
+        uploaded_file = None
+        if mode == "📸 ถ่ายภาพสดด้วยกล้อง":
+            uploaded_file = st.camera_input("กดปุ่มถ่ายภาพกระดาษคำตอบ (ส่องให้เห็นสี่เหลี่ยมดำ 4 มุมครบ)")
+        else:
+            uploaded_file = st.file_uploader("เลือกไฟล์รูปภาพ", type=["jpg", "png", "jpeg"])
 
         if uploaded_file and st.button("🚀 เริ่มตรวจข้อสอบ"):
-            detected = align_and_grade_40(uploaded_file.getvalue(), sub_info["total"])
-            
-            score = 0
-            results = []
-            for i in range(sub_info["total"]):
-                q = str(i + 1)
-                ans = detected[i]
-                key = sub_info["keys"].get(q)
-                is_correct = (ans == key)
-                if is_correct: score += 1
-                results.append({"ข้อ": q, "คำตอบ": ans, "เฉลย": key, "ผล": "✔ ถูก" if is_correct else "✘ ผิด"})
+            try:
+                detected, err_msg = align_and_grade_40(uploaded_file.getvalue(), sub_info["total"])
+                if err_msg:
+                    st.error(err_msg)
+                else:
+                    score = 0
+                    results = []
+                    for i in range(sub_info["total"]):
+                        q = str(i + 1)
+                        ans = detected[i]
+                        key = sub_info["keys"].get(q)
+                        is_correct = (ans == key)
+                        if is_correct: score += 1
+                        results.append({"ข้อ": q, "คำตอบ": ans, "เฉลย": key, "ผล": "✔ ถูก" if is_correct else "✘ ผิด"})
 
-            st.subheader(f"ผลคะแนน: {score} / {sub_info['total']} คะแนน")
-            
-            # แสดงผลแบบ 2 คอลัมน์ให้อ่านง่าย
-            col_res1, col_res2 = st.columns(2)
-            half = (len(results) + 1) // 2
-            with col_res1:
-                st.table(pd.DataFrame(results[:half]))
-            with col_res2:
-                st.table(pd.DataFrame(results[half:]))
-            
-            new_row = {"เลขที่": student_id, "วิชา": sub_info["name"], "คะแนน": score, "เต็ม": sub_info["total"]}
-            if os.path.exists(RESULT_FILE):
-                df_all = pd.read_excel(RESULT_FILE)
-                df_all = pd.concat([df_all, pd.DataFrame([new_row])], ignore_index=True)
-            else:
-                df_all = pd.DataFrame([new_row])
-            df_all.to_excel(RESULT_FILE, index=False)
-            st.success(f"บันทึกคะแนนของเลขที่ {student_id} เรียบร้อยแล้ว!")
+                    st.subheader(f"ผลคะแนน: {score} / {sub_info['total']} คะแนน")
+                    
+                    col_res1, col_res2 = st.columns(2)
+                    half = (len(results) + 1) // 2
+                    with col_res1:
+                        st.table(pd.DataFrame(results[:half]))
+                    with col_res2:
+                        st.table(pd.DataFrame(results[half:]))
+                    
+                    new_row = {"เลขที่": student_id, "วิชา": sub_info["name"], "คะแนน": score, "เต็ม": sub_info["total"]}
+                    if os.path.exists(RESULT_FILE):
+                        df_all = pd.read_excel(RESULT_FILE)
+                        df_all = pd.concat([df_all, pd.DataFrame([new_row])], ignore_index=True)
+                    else:
+                        df_all = pd.DataFrame([new_row])
+                    df_all.to_excel(RESULT_FILE, index=False)
+                    st.success(f"บันทึกคะแนนของเลขที่ {student_id} เรียบร้อยแล้ว!")
+            except Exception as e:
+                st.error("เกิดข้อผิดพลาดในการประมวลผลรูปภาพ กรุณาถ่ายภาพให้ระนาบตรง แสงสว่างเพียงพอ และเห็นสี่เหลี่ยมสีดำ 4 มุมครบถ้วน")
 
 with tab2:
     st.subheader("ตารางคะแนนรวมทั้งหมด")
